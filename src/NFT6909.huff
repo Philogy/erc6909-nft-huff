@@ -1,0 +1,320 @@
+#define function totalSupply(uint256) view returns (uint256)
+#define function balanceOf(address, uint256) view returns (uint256)
+#define function allowance(address, address, uint256) view returns (uint256)
+#define function isOperator(address, address) view returns (bool)
+#define function transfer(address, uint256, uint256) nonpayable returns (bool)
+#define function transferFrom(address, address, uint256, uint256) nonpayable returns (bool)
+#define function approve(address, uint256, uint256) nonpayable returns (bool)
+#define function setOperator(address, bool) nonpayable returns (bool)
+
+#define event Transfer(address indexed, address indexed, uint256 indexed, uint256)
+#define event OperatorSet(address indexed, address indexed, bool)
+#define event Approval(address indexed, address indexed, uint256 indexed, uint256)
+
+// TODO: Set hash based slot seed
+#define constant OWNER_OF_SLOT_SEED_SHIFTED = 0x11111111
+#define constant ALLOWANCE_SLOT_SEED = 0x222222220000000000000000
+#define constant OPERATOR_SLOT_SEED = 0x33333333
+
+#define macro _OWNER_SLOT(zero, word) = takes(1) returns(1) {
+    // takes:                       [token_id]
+    [OWNER_OF_SLOT_SEED_SHIFTED] // [token_id, slot_seed]
+    <zero>                       // [token_id, slot_seed, 0]
+    mstore                       // [token_id]
+    <word>                       // [token_id, 0x20]
+    mstore                       // []
+    0x24                         // [0x24]
+    0x1c                         // [0x24, 0x1c]
+    sha3                         // [slot]
+    // returns:                     [slot]
+}
+
+#define macro _LOAD_ADDR() = takes(1) returns(1) {
+    // takes:                 [offset]
+    calldataload           // [shifted_addr]
+    0x60                   // [shifted_addr, 0x60]
+    shr                    // [addr]
+    // returns:               [addr]
+}
+
+#define macro TOTAL_SUPPLY(zero) = takes(0) returns(0) {
+    0x4 calldataload           // [token_id]
+    _OWNER_SLOT(<zero>, msize) // [owner_slot]
+    sload                      // [owner]
+    <zero>                     // [owner, 0]
+    lt                         // [owner != 0]
+    <zero>                     // [owner != 0, 0]
+    mstore                     // []
+    0x20                       // [0x20]
+    <zero>                     // [0x20, 0]
+    return                     // [] -- end
+}
+
+#define macro BALANCE_OF(zero) = takes(0) returns(0) {
+    0x10 _LOAD_ADDR()          // [param_owner]
+    0x24 calldataload          // [param_owner, token_id]
+    _OWNER_SLOT(<zero>, msize) // [param_owner, owner_slot]
+    sload                      // [param_owner, owner]
+    eq                         // [is_owner]
+    <zero>                     // [is_owner, 0]
+    mstore                     // []
+    0x20                       // [0x20]
+    <zero>                     // [0x20, 0]
+    return                     // [] -- end
+}
+
+#define macro ALLOWANCE(zero) = takes(0) returns(0) {
+    [ALLOWANCE_SLOT_SEED]     // [allowance_slot_seed]
+    <zero>                    // [allowance_slot_seed, 0]
+    mstore                    // []
+    msize                     // [0x20]
+    0x24 calldataload         // [0x20, dirty_spender]
+    0x40                      // [0x20, dirty_spender, 0x40]
+    mstore                    // [0x20]
+    0x04 calldataload         // [0x20, dirty_owner]
+    0x2c                      // [0x20, dirty_owner, 0x2c]
+    mstore                    // [0x20]
+    0x44 calldataload         // [0x20, token_id]
+    0x18                      // [0x20, token_id, 0x18]
+    mstore                    // [0x20]
+    0x4c                      // [0x20, 0x4c]
+    0x14                      // [0x20, 0x4c, 0x14]
+    sha3                      // [0x20, allowance_slot]
+    sload                     // [0x20, allowance]
+    <zero>                    // [0x20, allowance, 0]
+    mstore                    // [0x20]
+    <zero>                    // [0x20, 0]
+    return                    // [] -- end
+}
+
+#define macro IS_OPERATOR(zero) = takes(0) returns(0) {
+    0x24 calldataload         // [dirty_spender]
+    0x28                      // [dirty_spender, 0x28]
+    mstore                    // []
+    0x04 calldataload         // [dirty_owner]
+    0x14                      // [dirty_owner, 0x14]
+    mstore                    // []
+    [OPERATOR_SLOT_SEED]
+    <zero>
+    mstore
+    0x2c
+    0x1c
+    sha3
+    sload
+    <zero>
+    mstore
+    0x20
+    <zero>                    // [0x20, 0]
+    return                    // [] -- end
+}
+
+#define macro TRANSFER(zero) = takes(0) returns(0) {
+    0x24 calldataload           // [token_id]
+    0x10 _LOAD_ADDR()           // [token_id, to]
+    dup1
+    dup3                        // [token_id, to, to, token_id]
+    _OWNER_SLOT(<zero>, msize)  // [token_id, to, to, owner_slot]
+    0x44 calldataload           // [token_id, to, to, owner_slot, amount]
+    dup2                        // [token_id, to, to, owner_slot, amount, owner_slot]
+    sload                       // [token_id, to, to, owner_slot, amount, owner]
+    caller
+    eq
+    dup2
+    gt
+    empty_revert jumpi          // [token_id, to, to, owner_slot, amount]
+    0x1
+    <zero>
+    mstore
+    complete_transfer jumpi
+        0x20 <zero> return
+    complete_transfer:
+
+    sstore // [token_id, to]
+    caller
+    __EVENT_HASH(Transfer)
+    0x20
+    <zero>
+    log4
+    0x20
+    <zero>
+    return
+}
+
+#define macro TRANSFER_FROM(zero) = takes(0) returns(0) {
+
+    0x64 calldataload             // [amount]
+    0x44 calldataload             // [token_id]
+    0x10 _LOAD_ADDR()             // [from]
+    0x30 _LOAD_ADDR()             // [from, to]
+    dup1
+
+    caller // [spender]
+    0x40                      // [spender, 0x40]
+    mstore                    // []
+    dup3                      // [from]
+    0x2c                      // [from, 0x3c]
+    mstore                    // []
+    [OPERATOR_SLOT_SEED]
+    0x18
+    mstore
+    0x2c
+    0x34
+    sha3
+    sload                    // [token_id, from, to, to, is_operator]
+    dup4 caller eq or        // [token_id, from, to, to, initial_allowed]
+    skip_allowance jumpi     // [token_id, from, to, to ]
+        [ALLOWANCE_SLOT_SEED]     // [token_id, from, to, to, allowance_slot_seed]
+        <zero>                    // [token_id, from, to, to, allowance_slot_seed, 0]
+        mstore                    // [token_id, from, to, to]
+        dup4
+        0x18
+        mstore
+        0x4c                      // [0x4c]
+        0x14                      // [0x4c, 0x14]
+        sha3                      // [amount, token_id, from, to, to, allowance_slot]
+        dup1                      // [amount, token_id, from, to, to, allowance_slot, allowance_slot]
+        sload                     // [amount, token_id, from, to, to, allowance_slot, allowance]
+        dup1                      // [amount, token_id, from, to, to, allowance_slot, allowance, allowance]
+        dup8
+        gt
+        empty_revert
+        jumpi                     // [amount, token_id, from, to, to, allowance_slot, allowance]
+        dup7
+        swap1
+        sub
+        swap1
+        sstore                    // [amount, token_id, from, to, to]
+    skip_allowance:               // [amount, token_id, from, to, to]
+
+    dup4                          // [amount, token_id, from, to, to, token_id]
+    _OWNER_SLOT(<zero>, 0x20)     // [amount, token_id, from, to, to, owner_slot]
+    dup1                          // [amount, token_id, from, to, to, owner_slot, owner_slot]
+    sload                         // [amount, token_id, from, to, to, owner_slot, owner]
+    dup5 eq                       // [amount, token_id, from, to, to, owner_slot, bal_from]
+    dup7
+    gt
+    empty_revert jumpi           // [amount, token_id, from, to, to, owner_slot]
+    0x1
+    <zero>
+    mstore                       // [amount, token_id, from, to, to, owner_slot]
+    dup6
+    complete_transfer_from jumpi
+        0x20 <zero> return
+    complete_transfer_from:      // [amount, token_id, from, to, to, owner_slot]
+        sstore                   // [amount, token_id, from, to]
+        swap1
+        __EVENT_HASH(Transfer)
+        0x20
+        <zero>
+        log4
+        0x20
+        <zero>
+        return
+}
+
+#define macro APPROVE(zero) = takes(0) returns(0) {
+    [ALLOWANCE_SLOT_SEED]     // [allowance_slot_seed]
+    <zero>                    // [allowance_slot_seed, 0]
+    mstore                    // []
+    0x10 _LOAD_ADDR()         // [spender]
+    dup1                      // [spender, spender]
+    0x40                      // [spender, spender, 0x40]
+    mstore                    // [spender]
+    caller                    // [spender, msg.sender]
+    0x2c                      // [spender, msg.sender, 0x2c]
+    mstore                    // [spender]
+    0x24 calldataload         // [spender, token_id]
+    dup1                      // [spender, token_id, token_id]
+    0x18                      // [spender, token_id, token_id, 0x18]
+    mstore                    // [spender, token_id]
+    0x44 calldataload         // [spender, token_id, amount]
+    dup1                      // [spender, token_id, amount, amount]
+    0x4c                      // [spender, token_id, amount, amount, 0x4c]
+    0x14                      // [spender, token_id, amount, amount, 0x4c, 0x14]
+    sha3                      // [spender, token_id, amount, amount, allowance_slot]
+    sstore                    // [spender, token_id, amount]
+    <zero>                    // [spender, token_id, amount, 0]
+    mstore                    // [spender, token_id]
+    swap1                     // [token_id, spender]
+    caller                    // [token_id, spender, msg.sender]
+    __EVENT_HASH(Approval)    // [token_id, spender, msg.sender, event_hash]
+    0x20                      // [token_id, spender, msg.sender, event_hash, 0x20]
+    <zero>                    // [token_id, spender, msg.sender, event_hash, 0x20, 0]
+    log4
+    0x1
+    <zero>
+    mstore
+    0x20
+    <zero>
+    return                    // [] -- end
+}
+
+#define macro SET_OPERATOR(zero) = takes(0) returns(0) {
+    0x10 _LOAD_ADDR()         // [operator]
+    0x24 calldataload         // [raw_approved]
+    <zero> lt                 // [approved != 0]
+    dup1
+    dup3                      // [operator, approved, approved, operator]
+    0x28                      // [operator, 0x28]
+    mstore                    // []
+    caller                    // [msg.sender]
+    0x14                      // [msg.sender, 0x14]
+    mstore                    // []
+    [OPERATOR_SLOT_SEED]
+    <zero>
+    mstore                    // [operator, approved, approved]
+    0x2c
+    0x1c
+    sha3                      // [operator, approved, approved, operator_slot]
+    sstore                    // [operator, approved]
+    <zero>
+    mstore                    // [operator]
+    caller
+    __EVENT_HASH(OperatorSet)
+    0x20
+    <zero>                    // [0x20, 0]
+    log3
+    0x1
+    <zero>
+    mstore
+    0x20
+    <zero>
+    return                    // [] -- end
+}
+
+#define macro _MAIN(zero) = takes(0) returns(0) {
+    <zero> calldataload 0xe0 shr       // [selector]
+
+    // TODO: Optimize dispatcher
+    dup1 __FUNC_SIG(totalSupply)  eq totalSupply_dest  jumpi
+    dup1 __FUNC_SIG(balanceOf)    eq balanceOf_dest    jumpi
+    dup1 __FUNC_SIG(allowance)    eq allowance_dest    jumpi
+    dup1 __FUNC_SIG(isOperator)   eq isOperator_dest   jumpi
+    dup1 __FUNC_SIG(transfer)     eq transfer_dest     jumpi
+    dup1 __FUNC_SIG(transferFrom) eq transferFrom_dest jumpi
+    dup1 __FUNC_SIG(approve)      eq approve_dest      jumpi
+         __FUNC_SIG(setOperator)  eq setOperator_dest  jumpi
+
+    totalSupply_dest:
+        TOTAL_SUPPLY(<zero>)
+    balanceOf_dest:
+        BALANCE_OF(<zero>)
+    allowance_dest:
+        ALLOWANCE(<zero>)
+    isOperator_dest:
+        IS_OPERATOR(<zero>)
+    transfer_dest:
+        TRANSFER(<zero>)
+    transferFrom_dest:
+        TRANSFER_FROM(<zero>)
+    approve_dest:
+        APPROVE(<zero>)
+    setOperator_dest:
+        SET_OPERATOR(<zero>)
+
+    empty_revert: <zero> <zero> revert
+}
+
+#define macro MAIN() = takes(0) returns(0) {
+    _MAIN(returndatasize)
+}
